@@ -1,0 +1,87 @@
+import tornado.httpserver
+import tornado.ioloop
+import tornado.options
+import tornado.web
+import requests
+import time
+import json
+from urllib import request
+from bs4 import BeautifulSoup
+import re
+import threading
+from tornado.options import define, options
+define("port", default=8000, help="run on the given port", type=int)
+
+
+def start(productID):
+    product_Name = productID
+    url = get_CommentUrl(product_Name)
+    currentPage = 1;
+    count = 100
+    while currentPage <= count:
+        max = get_Comment(url, currentPage, product_Name)
+        if int(max)>1000:
+            count=1000
+        else:
+            count = max
+        print(currentPage)
+        currentPage = currentPage + 1
+
+def get_CommentUrl(string):  # get the ajax url of the comment
+
+        url = 'https://search.jd.com/Search?keyword=' + string + '&enc=utf-8'
+        # print(url)
+        try:
+            resp = requests.get(url)
+            # print(resp.headers)
+            html = resp.text
+            # print(html)
+            regex = r'target="_blank" title=(.+) href="//item.jd.com/(.+).html" onclick'
+            items = re.findall(regex, html)
+            # print(items)
+            productID = items[0][1]
+            return (
+            "http://club.jd.com/comment/productPageComments.action?callback=fetchJSON_comment98vv27347&productId=" + productID + "&score=0&sortType=5&")
+        except Exception as e:
+            print('Error1:', e)
+
+
+def get_Comment(string, page, search):  # get the simple comment
+    try:
+        url = string + "page=" + str(page) + "&pageSize=10"
+        getreq = requests.get(url)
+        html = getreq.text
+        temp = re.findall(r'fetchJSON_comment98vv27347(.*);', html)
+        m = re.match('\(\{(.*)\}\)', temp[0])
+        t = '{' + m.group(1) + '}'
+        items = json.loads(t)
+        # print(items)
+        path = 'E:/python/京东评论数据/' + search + time.strftime('%Y-%m-%d', time.localtime(time.time())) + '.txt'
+        itemList = items["comments"]
+        maxpage = items["maxPage"]
+        with open(path, 'a', encoding='utf-8') as f:
+            for item in itemList:
+                # print(item["referenceName"] + " : " + item["content"])
+                comment = item["content"]
+                f.writelines(comment + "\n")
+        return maxpage
+    except Exception as e:
+        print('Error2:', e)
+
+class IndexHandler(tornado.web.RequestHandler):
+    def get(self):
+        try:
+            productID = self.get_argument('productID', '-1')
+            print(productID)
+            self.write("成功！")
+            start(productID)
+        except Exception as e:
+            print('Error:', e)
+
+
+if __name__ == "__main__":
+    tornado.options.parse_command_line()
+    app = tornado.web.Application(handlers=[(r"/", IndexHandler)])
+    http_server = tornado.httpserver.HTTPServer(app)
+    http_server.listen(options.port)
+    tornado.ioloop.IOLoop.instance().start()
