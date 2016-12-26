@@ -1,0 +1,129 @@
+# -*- coding=utf-8 -*-
+import threading
+import queue
+import requests
+import codecs
+import time
+import re
+import json
+from bs4 import BeautifulSoup
+urls_queue = queue.Queue()
+data_queue = queue.Queue()
+lock = threading.Lock()
+
+class ThreadUrl(threading.Thread):
+
+    def __init__(self, queue):
+        threading.Thread.__init__(self)
+        self.queue = queue
+
+    def run(self):
+        pass
+
+class ThreadCrawl(threading.Thread):
+
+    def __init__(self, url, queue, out_queue):
+        threading.Thread.__init__(self)
+        self.url = url
+        self.queue =queue
+        self.out_queue = out_queue
+
+    def run(self):
+        temp=1
+        while True:
+            page=str(self.queue.get())
+            item = url+"page="+page+"&pageSize=10"
+            print(page)
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/54.0.2840.99 Safari/537.36',
+                'Accept': '*/*',
+                'Accept-Encoding': 'gzip, deflate, sdch, br',
+                'Connection': 'keep-alive',
+                'Accept-Language': 'zh-CN,zh;q=0.8',
+                'Host': 'club.jd.com'
+            }
+            try:
+                resp =requests.get(item,headers=headers)
+                html = resp.text
+                if (html != ''):
+                    temp = re.findall(r'fetchJSON_comment98vv27347(.*);', html)
+                    m = re.match('\(\{(.*)\}\)', temp[0])
+                    t = '{' + m.group(1) + '}'
+                    items = json.loads(t)
+                    print ('now queue size is: %d' % self.queue.qsize())
+                    resp.close()
+                    self.out_queue.put(items)
+                    self.queue.task_done()
+                    time.sleep(1)
+                else:
+                    print(resp.status_code)
+                    time.sleep(5)
+                    resp.close()
+            except Exception as e:
+               print(e)
+
+    def _item_queue(self):
+        pass
+
+
+class ThreadWrite(threading.Thread):
+
+    def __init__(self, queue, lock, f):
+        threading.Thread.__init__(self)
+        self.queue = queue
+        self.lock = lock
+        self.f = f
+
+    def run(self):
+        while True:
+            item = self.queue.get()
+            self._parse_data(item)
+            self.queue.task_done()
+
+    def _parse_data(self, item):
+        itemList = item["comments"]
+        for i in itemList:
+            l =i["content"]
+            with self.lock:
+                print('write %s' % l)
+                self.f.writelines(l + "\n")
+
+
+def get_CommentUrl(string):  # get the ajax url of the comment
+
+    url = 'https://search.jd.com/Search?keyword=' + string + '&enc=utf-8'
+    print(url)
+    try:
+        resp = requests.get(url)
+        html = resp.text
+        if(html!=None):
+            regex = r'target="_blank" title=(.+) href="//item.jd.com/(.+).html" onclick'
+            items = re.findall(regex, html)
+            productID = items[0][1]
+            return ("http://club.jd.com/comment/productPageComments.action?callback=fetchJSON_comment98vv27347&productId=" + productID + "&score=0&sortType=5&")
+        else:
+            print(resp.status_code)
+    except Exception as e:
+        print('Error1:', e)
+
+if __name__ == "__main__":
+    product_Name = input('请输入要爬取商品名：')
+    page_Count = int(input('请输入要爬取的页数：'))
+    for i in range(page_Count):
+        urls_queue.put(i)
+    url = get_CommentUrl(product_Name)
+    path='E:/python/京东评论数据/' + product_Name+time.strftime('%Y-%m-%d', time.localtime(time.time())) + '.txt'
+    f = codecs.open(path, 'a', 'utf8')
+    for i in range(4):
+        t = ThreadCrawl(url, urls_queue, data_queue)
+        t.setDaemon(True)
+        t.start()
+    for i in range(4):
+        t = ThreadWrite(data_queue, lock, f)
+        t.setDaemon(True)
+        t.start()
+    urls_queue.join()
+    data_queue.join()
+    with lock:
+        f.close()
+    print('data_queue siez: %d' % data_queue.qsize())
